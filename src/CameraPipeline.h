@@ -5,6 +5,7 @@
 #include "AiqController.h"
 #include "CameraEnumerator.h"
 #include "IqOverride.h"
+#include "LensController.h"
 
 class V4l2Capture;
 class QImage;
@@ -49,6 +50,9 @@ public:
     bool manualOverrideActive() const { return m_overrideActive; }
 
     AiqController* aiq() { return m_aiq; }
+
+    // The focus motor, open only while a camera with one is running.
+    LensController* lens() { return &m_lens; }
     QString lastError() const { return m_lastError; }
     QString iqFileDir() const { return m_iqFileDir; }
 
@@ -60,6 +64,7 @@ signals:
 private:
     AiqController* m_aiq = nullptr;
     V4l2Capture* m_capture = nullptr;
+    LensController m_lens;
 
     QVector<CameraInfo> m_cameras;
     CameraInfo m_current;

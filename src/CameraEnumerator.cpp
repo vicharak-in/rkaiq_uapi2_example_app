@@ -46,6 +46,46 @@ QString processNameFor(const QString& pid)
     return QString::fromLatin1(comm.readAll()).trimmed();
 }
 
+// Read a devicetree property that holds a single big-endian u32, the way
+// phandles are stored under /sys/firmware/devicetree.
+bool readDtCell(const QString& path, quint32& value)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    const QByteArray raw = file.read(4);
+    if (raw.size() != 4)
+        return false;
+
+    value = (quint32(quint8(raw[0])) << 24) | (quint32(quint8(raw[1])) << 16)
+          | (quint32(quint8(raw[2])) << 8)  |  quint32(quint8(raw[3]));
+    return true;
+}
+
+// The sysfs directory backing a /dev/v4l-subdevN node.
+QString sysfsDirFor(const QString& subdevPath)
+{
+    if (subdevPath.isEmpty())
+        return {};
+    return QStringLiteral("/sys/class/video4linux/%1")
+        .arg(QFileInfo(subdevPath).fileName());
+}
+
+bool offersFocusControl(const QString& subdevPath)
+{
+    const int fd = ::open(subdevPath.toLocal8Bit().constData(), O_RDWR | O_CLOEXEC);
+    if (fd < 0)
+        return false;
+
+    v4l2_queryctrl query {};
+    query.id = V4L2_CID_FOCUS_ABSOLUTE;
+    const bool ok = xioctl(fd, VIDIOC_QUERYCTRL, &query) == 0
+                    && !(query.flags & V4L2_CTRL_FLAG_DISABLED);
+    ::close(fd);
+    return ok;
+}
+
 QString sensorNameFromEntity(const QString& entity)
 {
     static const QRegularExpression re(QStringLiteral("^m\\d+_[a-zA-Z]_([^ ]+)"));
@@ -320,6 +360,7 @@ QVector<CameraInfo> CameraEnumerator::enumerateCameras()
         }
 
         camera.sensorSubdev = CameraEnumerator::subdevForEntity(entity);
+        camera.lensSubdev   = CameraEnumerator::lensSubdevFor(camera.sensorSubdev);
 
         // rkaiq describes only sensors carrying Rockchip's rkmodule extensions.
         // For anything else its table comes back empty even though the driver
@@ -431,6 +472,38 @@ QString CameraEnumerator::iqFileNameFor(const QString& subdevPath)
         return {};
 
     return QStringLiteral("%1_%2_%3.json").arg(sensor, module, lens);
+}
+
+QString CameraEnumerator::lensSubdevFor(const QString& sensorSubdev)
+{
+    const QDir sysfs(QStringLiteral("/sys/class/video4linux"));
+    const auto entries = sysfs.entryList(QStringList{QStringLiteral("v4l-subdev*")},
+                                         QDir::Dirs | QDir::NoDotAndDotDot);
+
+    // Preferred route: follow the sensor's own lens-focus phandle.
+    quint32 wanted = 0;
+    const QString sensorDir = sysfsDirFor(sensorSubdev);
+    if (!sensorDir.isEmpty()
+        && readDtCell(sensorDir + QStringLiteral("/device/of_node/lens-focus"), wanted)) {
+        for (const QString& entry : entries) {
+            quint32 phandle = 0;
+            if (!readDtCell(sysfs.filePath(entry + QStringLiteral("/device/of_node/phandle")),
+                            phandle))
+                continue;
+            if (phandle == wanted)
+                return QStringLiteral("/dev/") + entry;
+        }
+    }
+
+    // Fallback for a device tree that does not describe the link: any subdev
+    // that can be told where to focus is, by definition, the focus motor.
+    for (const QString& entry : entries) {
+        const QString path = QStringLiteral("/dev/") + entry;
+        if (path != sensorSubdev && offersFocusControl(path))
+            return path;
+    }
+
+    return {};
 }
 
 QString CameraEnumerator::engineLockProblem(int phyId)

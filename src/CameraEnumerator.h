@@ -23,6 +23,7 @@ struct CameraInfo {
     QString videoNode;           // "/dev/videoN", discovered not assumed
     QString busInfo;             // "platform:rkisp0-vir0"
     QString sensorSubdev;        // "/dev/v4l-subdevN" for the sensor entity
+    QString lensSubdev;          // focus motor, empty on a fixed-focus module
     QVector<CameraMode> modes;
 
     // True when rkaiq reported no modes and they were read off the sensor
@@ -30,13 +31,15 @@ struct CameraInfo {
     // HDR and lens info are unavailable and the 3A algorithms may not converge.
     bool modesFromSubdev = false;
 
-    bool hasVcm    = false;      // focus motor present -> AF controls usable
+    bool hasVcm    = false;      // as rkaiq sees it; see lensSubdev for the truth
     bool hasFlash  = false;
     bool hasIrCut  = false;
     int  ispHwVer  = 0;
     int  phyId     = -1;
 
     bool isValid() const { return !sensorEntity.isEmpty(); }
+    // Whether a focus motor was found, independent of what rkaiq believes.
+    bool hasLens() const { return !lensSubdev.isEmpty(); }
     bool supportsHdr() const;
     // Distinct resolutions, and the frame rates offered for a given one.
     QVector<QPair<int, int>> resolutions() const;
@@ -79,6 +82,15 @@ QVector<CameraInfo> enumerateCameras();
 // The /dev/v4l-subdevN backing a media entity, found by name via
 // /sys/class/video4linux. Empty when the entity has no subdev node.
 QString subdevForEntity(const QString& entity);
+
+// The focus motor bound to a sensor, or an empty string when there is none.
+//
+// The device tree is the authority: a sensor node carries "lens-focus" holding
+// the phandle of its VCM, and sysfs exposes both that property and every
+// subdev's own phandle, so the two can be matched without parsing I2C
+// addresses or guessing from entity names. Falls back to looking for any
+// subdev that offers V4L2_CID_FOCUS_ABSOLUTE when the device tree is silent.
+QString lensSubdevFor(const QString& sensorSubdev);
 
 // Capture modes read directly from a sensor subdev with VIDIOC_SUBDEV_ENUM_*.
 //

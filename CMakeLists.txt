@@ -29,6 +29,8 @@ set(SOURCES
     src/CameraPipeline.cpp
     src/MainWindow.cpp
     src/IqOverride.cpp
+    src/LensController.cpp
+    src/ContrastAutoFocus.cpp
 )
 
 add_executable(camera-ctls ${SOURCES})

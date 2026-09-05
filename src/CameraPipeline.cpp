@@ -147,6 +147,13 @@ bool CameraPipeline::start(const CameraInfo& camera, int width, int height,
     m_capture->start();
     m_running = true;
 
+    // The focus motor is independent of the engine, so it is opened here rather
+    // than through rkaiq. Restarting the engine for an exposure change must not
+    // lose the focus position, so the last requested one is re-applied.
+    const int previousFocus = m_lens.lastRequested();
+    if (camera.hasLens() && m_lens.open(camera.lensSubdev) && previousFocus >= 0)
+        m_lens.setPosition(previousFocus);
+
     // Ask once, now that frames are flowing: if no statistics arrive the
     // algorithm-driven setters are inert and manual values have to go through
     // the IQ file instead.
@@ -169,6 +176,8 @@ bool CameraPipeline::start(const CameraInfo& camera, int width, int height,
 
 void CameraPipeline::stop()
 {
+    m_lens.close();
+
     if (!m_running && !m_aiq->isInitialised())
         return;
 

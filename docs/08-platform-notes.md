@@ -113,6 +113,23 @@ Deliberately **not** added, having checked the rkaiq source rather than guessed:
   failure is tolerated (`if (io_control(...) == 0)`), giving
   `pdaf_support = false`.
 
+## Upstream VCM drivers are invisible to rkaiq
+
+Same class of problem as the missing `enum_frame_interval` above: a driver that works
+perfectly well by itself, but does not follow a Rockchip convention rkaiq depends on.
+
+rkaiq finds a focus motor by **media entity name**, requiring it to begin with the sensor's
+module index (`CamHwIsp20.cpp:1049`). Rockchip's own VCM drivers build that name from
+`rockchip,camera-module-index` and `-facing` in the device tree. The upstream `ak7375` and
+`dw9807-vcm` drivers do not, and the camera overlays do not set those properties, so the
+subdev is called `ak7375 2-000c` rather than `m00_f_ak7375 2-000c` and rkaiq concludes there
+is no lens.
+
+The app does not depend on that. It resolves the motor from the device tree's `lens-focus`
+phandle and drives `V4L2_CID_FOCUS_ABSOLUTE` itself, so focus works regardless. See
+[04-focus-and-zoom.md](04-focus-and-zoom.md) for the detail and for what a kernel fix would
+involve.
+
 ## Known platform issue: 3A never runs
 
 Fixing mode enumeration did not fix 3A. See
@@ -133,6 +150,7 @@ inert.
 | `XCORE:E:invalid main scene len!` | `preInit_scene` runs before the IQ file is parsed. `rkisp_demo` logs it too. |
 | `ACCM:E:check yalp-gains[12])` | Appears in manual AE mode; the colour-matrix curve falls back. Colours still respond correctly. |
 | `QSocketNotifier: Can only be used with threads started with QThread` | Qt noticing librkaiq's own threads. Harmless. |
+| Focus group enabled while rkaiq reports `has_lens_vcm = 0` | Expected. The app found the motor through the device tree; rkaiq's own detection is name-based and fails on upstream VCM drivers. |
 
 ## Useful debug knobs
 

@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include "ContrastAutoFocus.h"
+
 #include "CameraPipeline.h"
 #include "LabeledSlider.h"
 #include "PreviewWidget.h"
@@ -82,6 +84,15 @@ MainWindow::MainWindow(const QString& iqFileDir, const QString& preferredNode, Q
     m_statusTimer->setInterval(kStatusRefreshMs);
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::refreshStatusBar);
     m_statusTimer->start();
+
+    m_autoFocusSearch = new ContrastAutoFocus(this);
+    m_autoFocusSearch->setLens(m_pipeline->lens());
+    connect(m_pipeline, &CameraPipeline::frameReady,
+            m_autoFocusSearch, &ContrastAutoFocus::onFrame);
+    connect(m_autoFocusSearch, &ContrastAutoFocus::finished,
+            this, &MainWindow::onFocusSearchFinished);
+    connect(m_autoFocusSearch, &ContrastAutoFocus::statusChanged,
+            this, &MainWindow::onStatusMessage);
 
     m_manualApplyTimer = new QTimer(this);
     m_manualApplyTimer->setSingleShot(true);
@@ -329,10 +340,22 @@ QGroupBox* MainWindow::buildFocusGroup()
     layout->addWidget(m_zoomSlider);
 
     connect(m_autoFocus, &QCheckBox::toggled, this, &MainWindow::onAutoFocusToggled);
-    connect(m_focusSlider, &LabeledSlider::valueChanged, this,
-            [this](double code) { aiq()->setFocusPosition(int(code)); });
-    connect(m_oneshotFocusButton, &QPushButton::clicked, this,
-            [this] { aiq()->triggerOneshotFocus(); });
+    connect(m_focusSlider, &LabeledSlider::valueChanged, this, [this](double code) {
+        if (focusGoesThroughV4l2()) {
+            // A deliberate move outranks a search that is still running.
+            m_autoFocusSearch->cancel();
+            m_pipeline->lens()->setPosition(int(code));
+            return;
+        }
+        aiq()->setFocusPosition(int(code));
+    });
+    connect(m_oneshotFocusButton, &QPushButton::clicked, this, [this] {
+        if (focusGoesThroughV4l2()) {
+            m_autoFocusSearch->focusOnce();
+            return;
+        }
+        aiq()->triggerOneshotFocus();
+    });
     connect(m_zoomSlider, &LabeledSlider::valueChanged, this,
             [this](double position) { aiq()->setZoomPosition(int(position)); });
 
@@ -788,22 +811,30 @@ void MainWindow::applyCapabilityGating()
     // fixed-focus module the whole group greys out, and on a VCM module the very
     // same code enables it with the real range. No per-sensor branching.
     const CameraInfo& camera = m_pipeline->currentCamera();
-    const AiqController::IntRange focus = running ? aiq()->focusRange()
-                                                  : AiqController::IntRange {};
-    const bool focusUsable = running && camera.hasVcm && focus.valid;
+    LensController* lens = m_pipeline->lens();
+
+    // The motor is found from the device tree, so a module whose VCM driver
+    // rkaiq cannot recognise still gets working focus.
+    const bool lensOpen = running && lens->isOpen();
+    const AiqController::IntRange engineFocus = running ? aiq()->focusRange()
+                                                        : AiqController::IntRange {};
+    const bool focusUsable = lensOpen || (running && camera.hasVcm && engineFocus.valid);
 
     QString focusReason;
     if (!running)
         focusReason = QStringLiteral("Camera is not streaming");
-    else if (!camera.hasVcm)
-        focusReason = QStringLiteral("No focus motor on this sensor");
-    else if (!focus.valid)
-        focusReason = QStringLiteral("Sensor reported no usable focus range");
+    else if (!camera.hasLens())
+        focusReason = QStringLiteral("No focus motor on this camera");
+    else
+        focusReason = QStringLiteral("Focus motor found but not usable");
 
     setGroupEnabled(m_focusGroup, focusUsable, focusReason);
 
     if (focusUsable) {
-        m_focusSlider->setRange(focus.min, focus.max);
+        if (lensOpen)
+            m_focusSlider->setRange(lens->minimum(), lens->maximum());
+        else
+            m_focusSlider->setRange(engineFocus.min, engineFocus.max);
 
         const AiqController::IntRange zoom = aiq()->zoomRange();
         m_zoomSlider->setVisible(zoom.valid);
@@ -969,15 +1000,45 @@ void MainWindow::onAutoFocusToggled(bool automatic)
 
     m_focusSlider->setEnabled(manual);
     m_zoomSlider->setEnabled(m_focusGroup->isEnabled());
-    m_oneshotFocusButton->setEnabled(automatic && m_focusGroup->isEnabled());
+    // With our own search, a one-shot is just as useful while holding a manual
+    // position, so it is not tied to the auto checkbox the way rkaiq's is.
+    m_oneshotFocusButton->setEnabled(m_focusGroup->isEnabled()
+                                     && (automatic || focusGoesThroughV4l2()));
 
     if (!m_pipeline->isRunning() || !m_focusGroup->isEnabled())
         return;
+
+    if (focusGoesThroughV4l2()) {
+        // Continuous mode sweeps now and then watches the picture; manual mode
+        // simply holds wherever the slider is.
+        m_autoFocusSearch->setContinuous(automatic);
+        if (manual)
+            m_pipeline->lens()->setPosition(int(m_focusSlider->value()));
+        return;
+    }
 
     aiq()->setAfMode(automatic ? AiqController::Mode::Auto : AiqController::Mode::Manual);
 
     if (manual)
         aiq()->setFocusPosition(int(m_focusSlider->value()));
+}
+
+// A search moves the lens on its own, so the slider has to follow it home or it
+// would misreport where the focus actually is.
+void MainWindow::onFocusSearchFinished(int position)
+{
+    if (position >= 0)
+        m_focusSlider->setValueSilently(position);
+}
+
+bool MainWindow::focusGoesThroughV4l2() const
+{
+    if (!m_pipeline->isRunning() || !m_pipeline->lens()->isOpen())
+        return false;
+
+    // Leave a healthy board to rkaiq: it drives the same motor, and its AF has
+    // the ISP statistics ours has to work without.
+    return !(m_pipeline->statisticsAvailable() && m_pipeline->currentCamera().hasVcm);
 }
 
 void MainWindow::onAutoNoiseReductionToggled(bool automatic)

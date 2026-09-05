@@ -6,6 +6,8 @@
 #include "CameraEnumerator.h"
 #include "IqOverride.h"
 
+class ContrastAutoFocus;
+
 class CameraPipeline;
 class PreviewWidget;
 class LabeledSlider;
@@ -38,6 +40,7 @@ private slots:
     void onAutoExposureToggled(bool automatic);
     void onAutoWhiteBalanceToggled(bool automatic);
     void onAutoFocusToggled(bool automatic);
+    void onFocusSearchFinished(int position);
     void onAutoNoiseReductionToggled(bool automatic);
     void onWhiteBalanceModeToggled();
 
@@ -53,6 +56,9 @@ private:
     // True when the engine gets no statistics, so its live setters do nothing
     // and manual values have to be written into the IQ file instead.
     bool manualGoesThroughIq() const;
+    // True when the app drives the focus motor itself, because rkaiq either
+    // cannot see it or has no statistics to run its own AF with.
+    bool focusGoesThroughV4l2() const;
     IqOverride::Values currentManualValues() const;
     void scheduleManualApply();
     void updateStatisticsNotice();
@@ -86,6 +92,7 @@ private:
     QTimer* m_manualApplyTimer = nullptr;
     QString m_sensorBaseText;
     bool m_applyingManual = false;
+    ContrastAutoFocus* m_autoFocusSearch = nullptr;
 
     QString m_iqFileDir;
     QString m_preferredNode;

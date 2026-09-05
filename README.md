@@ -97,7 +97,7 @@ does not jump.
 | Stream | resolution, frame rate, HDR mode | [01](docs/01-engine-lifecycle.md) |
 | Exposure | exposure time, analogue gain, digital gain, flicker, AE lock | [02](docs/02-exposure.md) |
 | White balance | colour temperature **or** R/G/B gain | [03](docs/03-white-balance.md) |
-| Focus | focus position, focus-once, zoom | [04](docs/04-focus-and-zoom.md) |
+| Focus | focus position, focus-once, continuous autofocus, zoom | [04](docs/04-focus-and-zoom.md) |
 | Image | contrast, brightness, saturation, hue, sharpness, mirror/flip | [05](docs/05-image-and-noise.md) |
 | Denoise | overall strength, or spatial (2D) + temporal (3D) | [05](docs/05-image-and-noise.md) |
 
@@ -126,6 +126,12 @@ brightness, contrast, saturation, hue and sharpness are all handled this way.
 Read [docs/06-statistics.md](docs/06-statistics.md) for the diagnosis and
 [docs/07-iq-file-override.md](docs/07-iq-file-override.md) for the mechanism.
 
+Focus is handled differently again. rkaiq cannot see the motor on modules whose VCM driver
+does not follow its naming convention, so the app finds the motor through the device tree
+and drives it over V4L2, and runs its own contrast autofocus from the preview frames. That
+works today with no kernel change, and it is instant rather than costing a restart. See
+[docs/04-focus-and-zoom.md](docs/04-focus-and-zoom.md).
+
 Still inert: **auto** exposure/white balance (they need the statistics
 themselves) and the denoise group (not yet routed through the override).
 
@@ -139,6 +145,8 @@ src/
   AiqController.*     Thin wrapper over rkaiq uAPI2
   CameraEnumerator.*  Camera/node/subdev discovery, engine-owner detection
   IqOverride.*        Order-preserving IQ file patching
+  LensController.*    Focus motor over V4L2
+  ContrastAutoFocus.* Sweep-and-score autofocus
   V4l2Capture.*       Capture thread, NV12 -> QImage
   PreviewWidget.*     Preview rendering
   LabeledSlider.*     Slider + spin box with change coalescing
